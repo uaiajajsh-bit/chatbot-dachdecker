@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Chat – Dachdecker Müller</title>
+<style>
+  :root{
+    --primary:#0b5a3c; /* anpassbar (Firma-Farbe) */
+    --accent:#f0f6f4;
+    --bubble-user:#e6f6ee;
+    --bubble-bot:#ffffff;
+    --muted:#666;
+    --radius:14px;
+    font-family:Inter, system-ui, Roboto, "Helvetica Neue", Arial;
+  }
+  html,body{height:100%; margin:0; background:linear-gradient(180deg,#fafafa, #f6f7f8);}
+  .chat-shell{width:380px; height:640px; display:flex; flex-direction:column; border-radius:18px; overflow:hidden; box-shadow:0 8px 30px rgba(12,20,30,0.12); background:#fff; border:1px solid rgba(0,0,0,0.04)}
+  .chat-header{background:var(--primary); color:#fff; padding:14px 16px; display:flex; gap:10px; align-items:center}
+  .brand {display:flex; flex-direction:column}
+  .brand h3{margin:0; font-size:15px; font-weight:600; letter-spacing:0.2px}
+  .brand p{margin:0; font-size:12px; opacity:0.95}
+  .chat-body{flex:1; padding:16px; overflow:auto; background:linear-gradient(180deg,#fafafa, #fff)}
+  .msg{max-width:78%; padding:10px 12px; margin-bottom:10px; border-radius:12px; box-shadow:0 1px 0 rgba(0,0,0,0.03)}
+  .msg.bot{background:var(--bubble-bot); align-self:flex-start; border-top-left-radius:4px}
+  .msg.user{background:var(--bubble-user); align-self:flex-end; border-top-right-radius:4px}
+  .muted{color:var(--muted); font-size:12px}
+  .input-row{padding:12px; border-top:1px solid rgba(0,0,0,0.05); display:flex; gap:8px; align-items:center}
+  .input{flex:1; display:flex; gap:8px; align-items:center}
+  input[type="text"], textarea{width:100%; border:1px solid rgba(0,0,0,0.08); padding:10px 12px; border-radius:10px; font-size:14px}
+  .btn{background:var(--primary); color:#fff; padding:10px 14px; border-radius:10px; cursor:pointer; border:none; font-weight:600}
+  .small{font-size:12px; color:var(--muted)}
+  .file-preview{display:flex; gap:8px; margin-top:8px; flex-wrap:wrap}
+  .file-preview img{height:70px; border-radius:8px; object-fit:cover; border:1px solid rgba(0,0,0,0.06)}
+  .chip{background:#f4f7f6; padding:6px 8px; border-radius:999px; font-size:13px; color:var(--muted)}
+  .center{display:flex; align-items:center; justify-content:center}
+  .footer-note{padding:10px 14px; font-size:12px; color:var(--muted); border-top:1px dashed rgba(0,0,0,0.04)}
+  @media (max-width:420px){ .chat-shell{width:100%; height:100vh; border-radius:0} }
+</style>
+</head>
+<body>
+
+<div class="center" style="padding:20px">
+  <div class="chat-shell" id="chat">
+    <div class="chat-header">
+      <div style="width:48px;height:48px;border-radius:10px;background:#fff;display:flex;align-items:center;justify-content:center">
+        <!-- Replace with real logo -->
+        <img src="https://dachdecker-mueller.de/wp-content/themes/dachdecker-mueller/assets/images/logo.png" alt="Logo" style="height:34px;object-fit:contain" onerror="this.style.display='none'">
+      </div>
+      <div class="brand">
+        <h3>Dachdecker Müller GmbH</h3>
+        <p>Digitaler Assistent – Seehofstraße 60, 64653 Lorsch</p>
+      </div>
+    </div>
+
+    <div class="chat-body" id="messages" aria-live="polite">
+      <!-- messages appended here -->
+    </div>
+
+    <div class="footer-note">
+      Sie sprechen mit dem digitalen Assistenten von Dachdecker Müller. Bei komplexen Fällen meldet sich ein Dachdeckermeister persönlich.
+    </div>
+
+    <div class="input-row">
+      <div class="input">
+        <input id="userInput" type="text" placeholder="Wie können wir Ihnen helfen? (z. B. Dachreparatur, Dachdämmung...)" />
+      </div>
+      <button id="sendBtn" class="btn">Senden</button>
+    </div>
+
+    <div style="padding:12px; border-top:1px solid rgba(0,0,0,0.03)">
+      <div style="display:flex; gap:8px; align-items:center;">
+        <label class="chip" style="cursor:pointer">
+          <input type="file" id="fileInput" accept="image/*,application/pdf" style="display:none">
+          Foto/Plan hinzufügen
+        </label>
+        <button id="startBtn" class="chip">Start-Assistent (Schnellabfrage)</button>
+        <button id="clearBtn" class="chip">Chat zurücksetzen</button>
+      </div>
+      <div class="file-preview" id="filePreview"></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+/* ---------------- CONFIG ------------------
+ Replace WEBHOOK_URL with your webhook (Google Apps Script URL or other)
+ If you don't want network sending set to null -> data will be saved to localStorage only.
+------------------------------------------- */
+const CONFIG = {
+  COMPANY: "Dachdecker Müller GmbH",
+  ADDRESS: "Seehofstraße 60, 64653 Lorsch",
+  REGION: "Rhein-Neckar-Gebiet",
+  WEBHOOK_URL: "YOUR_WEBHOOK_URL_HERE", // <-- REPLACE with Apps Script Web App URL or other endpoint
+  AUTO_REPLY_DELAY_MS: 600
+};
+
+/* ---------- Simple chat UI logic ---------- */
+const messagesEl = document.getElementById('messages');
+const inputEl = document.getElementById('userInput');
+const sendBtn = document.getElementById('sendBtn');
+const startBtn = document.getElementById('startBtn');
+const clearBtn = document.getElementById('clearBtn');
+const fileInput = document.getElementById('fileInput');
+const filePreview = document.getElementById('filePreview');
+
+let conversation = JSON.parse(localStorage.getItem('dm_conversation') || '[]');
+let lead = JSON.parse(localStorage.getItem('dm_lead') || '{}');
+let pendingFiles = JSON.parse(localStorage.getItem('dm_files') || '[]');
+
+function renderMessages(){
+  messagesEl.innerHTML = '';
+  conversation.forEach(m=>{
+    const d = document.createElement('div');
+    d.className = 'msg ' + (m.from==='bot' ? 'bot' : 'user');
+    d.innerHTML = `<div style="font-size:14px">${m.text}</div><div class="muted" style="margin-top:6px">${m.time}</div>`;
+    messagesEl.appendChild(d);
+  });
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+function pushMessage(from, text){
+  const now = new Date();
+  const time = now.toLocaleString('de-DE',{hour:'2-digit',minute:'2-digit', day:'2-digit', month:'2-digit', year:'numeric'});
+  conversation.push({from,text,time});
+  localStorage.setItem('dm_conversation', JSON.stringify(conversation));
+  renderMessages();
+}
+function botReply(text){
+  setTimeout(()=> pushMessage('bot', text), CONFIG.AUTO_REPLY_DELAY_MS);
+}
+
+/* ---------- Initial greeting ---------- */
+if(conversation.length===0){
+  pushMessage('bot', `Guten Tag — ich bin Max, der digitale Assistent von ${CONFIG.COMPANY} aus Lorsch. Wie kann ich Ihnen heute helfen? (z. B. Dachreparatur, Dachdämmung, Solaranlage, Dachfenster)`);
+}
+
+/* ---------- Main interaction logic (rule-based) ---------- */
+
+function processUserInput(raw){
+  const text = (raw||'').trim();
+  if(!text) return;
+  pushMessage('user', text);
+
+  const lower = text.toLowerCase();
+
+  // Quick intent checks
+  if(lower.includes('repar') || lower.includes('undicht') || lower.includes('sturm') || lower.includes('hagel')){
+    botReply("Verstanden — Sie benötigen eine Reparatur. Ist es ein Steildach (Ziegel/Schiefer) oder ein Flachdach?");
+    lead.intendedService = 'Reparatur';
+    saveLead();
+    return;
+  }
+  if(lower.includes('sanier') || lower.includes('sanierung') || lower.includes('neu')){
+    botReply("Danke — wollen Sie eine vollständige Dachsanierung oder nur Teilarbeiten (z. B. Dämmung, Austausch von Ziegeln)?");
+    lead.intendedService = 'Sanierung/Neu';
+    saveLead();
+    return;
+  }
+  if(lower.includes('solar') || lower.includes('photovolta') || lower.includes('solarthermie')){
+    botReply("Sehr gut — Photovoltaik/Solar. Möchten Sie eine Erstberatung zur Wirtschaftlichkeit oder ein konkretes Angebot?");
+    lead.intendedService = 'Solar';
+    saveLead();
+    return;
+  }
+  if(lower.includes('dachfenster') || lower.includes('fenster')){
+    botReply("Alles klar — Einbau/Austausch von Dachfenstern. Haben Sie bereits Maße oder eine Wunschposition?");
+    lead.intendedService = 'Dachfenster';
+    saveLead();
+    return;
+  }
+  if(lower.includes('termin') || lower.includes('besichtigung') || lower.includes('rückruf')){
+    botReply("Gern. Darf ich kurz Ihren Namen und die Telefonnummer notieren, damit sich ein Dachdeckermeister bei Ihnen melden kann?");
+    lead.requestCallback = true;
+    saveLead();
+    return;
+  }
+
+  // fallback: ask clarifying question
+  botReply("Danke für die Info — könnten Sie das kurz konkretisieren? Z. B. 'Reparatur', 'Sanierung', 'Solar', 'Dachfenster' oder 'Termin'?");
+}
+
+/* ---------- Lead capture flow (interactive buttons) ---------- */
+startBtn.addEventListener('click', ()=> {
+  pushMessage('user', 'Start-Assistent');
+  setTimeout(()=> {
+    botReply("Dann starten wir kurz mit ein paar Fragen, damit unsere Meister sich optimal vorbereiten können. Ist das in Ordnung?");
+    // next steps: ask structured questions
+    setTimeout(()=> askQuestion1(), 900);
+  }, 200);
+});
+
+function askQuestion1(){
+  botReply("Welcher der folgenden Punkte trifft am besten zu? (1) Dachreparatur (2) Dachsanierung (3) Solar (4) Dachfenster (5) Sonstiges — bitte Zahl oder Wort eingeben.");
+}
+function askQuestion2(){
+  botReply("Handelt es sich um ein Steildach oder Flachdach?");
+}
+function askQuestion3(){
+  botReply("Ort des Objekts (PLZ & Ort)?");
+}
+function askQuestion4(){
+  botReply("Wann wäre ein Termin zur Besichtigung/ Rückruf möglich? (z. B. Mo–Fr, vormittags)");
+}
+function askQuestion5(){
+  botReply("Könnten Sie bitte Name und Telefonnummer oder E-Mail angeben, damit sich unser Meister meldet?");
+}
+
+let structuredStep = 0;
+messagesEl.addEventListener('DOMNodeInserted', (e)=>{
+  // small heuristic: if last user message was 'Start-Assistent' we progress
+});
+
+inputEl.addEventListener('keydown', (ev)=>{
+  if(ev.key === 'Enter'){ ev.preventDefault(); sendBtn.click(); }
+});
+sendBtn.addEventListener('click', ()=>{
+  const text = inputEl.value.trim();
+  if(!text) return;
+  inputEl.value = '';
+  // check structured mode progression
+  const lastUser = conversation.slice().reverse().find(m=>m.from==='user');
+  // If recent bot asked one of the structured prompts, progress accordingly:
+  const lastBot = conversation.slice().reverse().find(m=>m.from==='bot');
+  if(lastBot && lastBot.text && lastBot.text.includes('bitte Zahl') || lastBot && lastBot.text.includes('Handelt es sich um ein Steildach')){
+    // structured flow mapping
+    if(lastBot.text.includes('bitte Zahl')){
+      // map answer to service
+      const lower = text.toLowerCase();
+      if(text.includes('1') || lower.includes('repar')) lead.intendedService='Reparatur';
+      else if(text.includes('2') || lower.includes('sanier')) lead.intendedService='Sanierung/Neu';
+      else if(text.includes('3') || lower.includes('solar')) lead.intendedService='Solar';
+      else if(text.includes('4') || lower.includes('fenster')) lead.intendedService='Dachfenster';
+      else lead.intendedService='Sonstiges';
+      saveLead();
+      askQuestion2();
+      return processUserInput(text);
+    } else if(lastBot.text.includes('Steildach') ){
+      lead.roofType = text;
+      saveLead();
+      askQuestion3();
+      return processUserInput(text);
+    } else if(lastBot.text.includes('PLZ') ){
+      lead.location = text;
+      saveLead();
+      askQuestion4();
+      return processUserInput(text);
+    } else if(lastBot.text.includes('Termin') ){
+      lead.preferredTime = text;
+      saveLead();
+      askQuestion5();
+      return processUserInput(text);
+    } else if(lastBot.text.includes('Telefonnummer') ){
+      // final
+      // try to extract email/phone
+      if(text.match(/@/)) lead.email = text;
+      else lead.phone = text;
+      saveLead();
+      pushMessage('bot', 'Vielen Dank — ich habe Ihre Angaben aufgenommen. Möchten Sie noch ein Foto oder einen Plan hochladen? (Button "Foto/Plan hinzufügen")');
+      // send lead
+      sendLeadToWebhook();
+      return pushMessage('bot', 'Ein Dachdeckermeister meldet sich in der Regel innerhalb von 1-2 Werktagen. Möchten Sie einen Rückruf bestätigen?');
+    }
+  }
+
+  // not in structured flow -> generic processing
+  processUserInput(text);
+});
+
+/* ---------- File uploads ---------- */
+fileInput.addEventListener('change', async (ev)=>{
+  const files = Array.from(ev.target.files);
+  for(const f of files){
+    // preview image or pdf icon
+    const reader = new FileReader();
+    reader.onload = function(e){
+      const src = e.target.result;
+      const img = document.createElement('img');
+      img.src = src;
+      img.title = f.name;
+      filePreview.appendChild(img);
+      pendingFiles.push({name:f.name, data:src, type:f.type});
+      localStorage.setItem('dm_files', JSON.stringify(pendingFiles));
+    };
+    if(f.type.startsWith('image/')) reader.readAsDataURL(f);
+    else {
+      // for pdf or other, create a placeholder
+      const placeholder = document.createElement('div');
+      placeholder.className = 'chip';
+      placeholder.textContent = f.name;
+      filePreview.appendChild(placeholder);
+      const blob = await f.arrayBuffer();
+      const base64 = arrayBufferToBase64(blob);
+      pendingFiles.push({name:f.name, data:'data:' + f.type + ';base64,' + base64, type:f.type});
+      localStorage.setItem('dm_files', JSON.stringify(pendingFiles));
+    }
+  }
+  // reset input
+  fileInput.value = '';
+});
+
+function arrayBufferToBase64(buffer){
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  const len = bytes.byteLength;
+  for(let i=0;i<len;i++){ binary += String.fromCharCode(bytes[i]); }
+  return btoa(binary);
+}
+
+/* ---------- Lead storage + send ---------- */
+function saveLead(){
+  localStorage.setItem('dm_lead', JSON.stringify(lead));
+}
+function sendLeadToWebhook(){
+  const payload = {
+    company: CONFIG.COMPANY,
+    timestamp: new Date().toISOString(),
+    lead,
+    files: pendingFiles,
+    conversation: conversation.slice(-10)
+  };
+  // always keep local copy
+  localStorage.setItem('dm_last_sent', JSON.stringify(payload));
+  if(!CONFIG.WEBHOOK_URL || CONFIG.WEBHOOK_URL==='YOUR_WEBHOOK_URL_HERE'){
+    pushMessage('bot', 'Hinweis: Kein Webhook konfiguriert. Die Anfrage wurde lokal gespeichert. Bitte konfigurieren Sie die Webhook-URL in der Datei.');
+    return;
+  }
+
+  pushMessage('bot', 'Ihre Angaben werden nun an Dachdecker Müller übermittelt — einen Moment bitte.');
+  fetch(CONFIG.WEBHOOK_URL, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  }).then(r=>{
+    if(r.ok){
+      pushMessage('bot', 'Vielen Dank! Ihre Anfrage wurde erfolgreich übermittelt. Ein Dachdeckermeister meldet sich in Kürze.');
+      // clear lead & files
+      lead = {};
+      pendingFiles = [];
+      localStorage.removeItem('dm_lead');
+      localStorage.removeItem('dm_files');
+      localStorage.setItem('dm_conversation', JSON.stringify(conversation));
+      filePreview.innerHTML = '';
+    } else {
+      pushMessage('bot', 'Es gab einen Fehler beim Senden — die Daten wurden lokal gespeichert. Bitte informieren Sie Ihren Administrator.');
+    }
+  }).catch(err=>{
+    console.error(err);
+    pushMessage('bot', 'Netzwerkfehler beim Senden. Die Daten sind lokal gespeichert (Konsole zeigt Details).');
+  });
+}
+
+/* ---------- Clear chat ---------- */
+clearBtn.addEventListener('click', ()=>{
+  if(confirm('Chatverlauf löschen?')) {
+    conversation = [];
+    lead = {};
+    pendingFiles = [];
+    localStorage.removeItem('dm_conversation');
+    localStorage.removeItem('dm_lead');
+    localStorage.removeItem('dm_files');
+    filePreview.innerHTML = '';
+    pushMessage('bot','Guten Tag — ich bin Max, der digitale Assistent von ' + CONFIG.COMPANY + '. Wie kann ich Ihnen heute helfen?');
+  }
+});
+
+/* ---------- helpers ---------- */
+renderMessages();
+</script>
+</body>
+</html>
